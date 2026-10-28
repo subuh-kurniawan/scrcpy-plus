@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=scrcpy-plus v3 (DeX & Control Center)
+Comment=Android Screen Mirroring & Single-Window Samsung DeX Workspace (by Subuh Kurniawan)
+Exec=/usr/bin/env bash -c 'cd "$(dirname "%k")" && ./scrcpy-plus-linux.sh'
+Icon=phone
+Terminal=false
+Categories=Utility;Development;AudioVideo;
+StartupNotify=true

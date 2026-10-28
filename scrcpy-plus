@@ -1,0 +1,2099 @@
+#!/usr/bin/env bash
+set -eo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRCPY_BIN="${SCRCPY_BIN:-$SCRIPT_DIR/scrcpy}"
+if [[ -z "${ADB_BIN:-}" ]]; then
+  if [[ -x "$SCRIPT_DIR/adb" ]]; then
+    ADB_BIN="$SCRIPT_DIR/adb"
+  else
+    ADB_BIN="$(command -v adb || true)"
+  fi
+fi
+
+DEFAULT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/scrcpy-plus"
+DEFAULT_CONFIG_FILE="$DEFAULT_CONFIG_DIR/config.env"
+CONFIG_FILE="${SCRCPY_CONFIG:-$DEFAULT_CONFIG_FILE}"
+
+# Connection & Device
+profile=""
+serial=""
+select_usb=0
+wireless=0
+tcpip_addr=""
+pair_addr=""
+pair_code=""
+disconnect_addr=""
+
+# Video & Display
+bitrate=""
+fps=""
+max_size=""
+video_codec=""
+video_encoder=""
+video_source=""
+display_id=""
+orientation=""
+capture_orientation=""
+angle=""
+crop=""
+video_buffer=""
+render_driver=""
+no_video=0
+no_window=0
+new_display=""
+use_new_display=0
+no_vd_destroy_content=0
+no_vd_system_decorations=0
+display_ime_policy=""
+
+# Camera (Android 12+)
+camera_facing=""
+camera_id=""
+camera_size=""
+camera_ar=""
+camera_fps=""
+camera_high_speed=0
+
+# Audio
+no_audio=0
+audio_source=""
+audio_codec=""
+audio_encoder=""
+audio_bitrate=""
+audio_buffer=""
+audio_output_buffer=""
+audio_dup=0
+require_audio=0
+
+# Recording
+record_path=""
+record_format=""
+record_orientation=""
+no_playback=0
+time_limit=""
+
+# Input & Peripherals
+no_control=0
+show_touches=0
+keyboard_mode=""
+mouse_mode=""
+gamepad_mode=""
+otg_mode=0
+prefer_text=0
+raw_key_events=0
+no_key_repeat=0
+legacy_paste=0
+no_clipboard_autosync=0
+no_mouse_hover=0
+shortcut_mod=""
+push_target=""
+
+# Window & Power
+fullscreen=0
+windowed=0
+borderless=0
+always_on_top=0
+window_title=""
+window_x=""
+window_y=""
+window_width=""
+window_height=""
+stay_awake=0
+screen_off=0
+power_off_on_close=0
+no_power_on=0
+screen_off_timeout=""
+disable_screensaver=0
+kill_adb_on_close=0
+print_fps=0
+
+# App & Utility Actions
+start_app=""
+list_profiles=0
+interactive_menu=0
+show_status=0
+show_device_info=0
+install_launcher=0
+launch_gui=0
+screenshot_path=""
+take_screenshot=0
+install_apk_path=""
+push_src=""
+push_dest="/sdcard/Download/"
+send_text_val=""
+keyevent_val=""
+desktop_mode_action=""
+launch_display_id=""
+launch_display_app=""
+launch_freeform=0
+launch_force_stop=0
+launch_landscape=0
+display_keyevent_id=""
+display_keyevent_val=""
+display_rotation_id=""
+display_rotation_mode=""
+display_dpi_id=""
+display_dpi_val=""
+screenshot_display_id=""
+list_files_dir=""
+pull_src=""
+pull_dest="$HOME/Downloads/"
+tap_x=""
+tap_y=""
+swipe_args=()
+run_doctor=0
+scan_wifi=0
+
+extra_args=()
+declare -a scrcpy_args=()
+
+load_config() {
+  if [[ -n "${1:-}" && -f "$1" ]]; then
+    # shellcheck disable=SC1090
+    . "$1"
+  fi
+}
+
+list_available_profiles() {
+  cat <<'EOF'
+Available profiles:
+  default      - scrcpy defaults
+  gaming       - high FPS (60), 20M bitrate, touches on, screensaver disabled
+  recording    - records video automatically (30M bitrate + audio output)
+  presentation - fullscreen + touch indicators + 12M bitrate
+  productivity - compact, stay-awake, control-friendly (8M bitrate)
+  debug        - show touches, print FPS, disable screensaver (10M bitrate)
+  windowed     - non-fullscreen desktop window mode (9M bitrate)
+  private      - phone screen off (-S), power off on close, screensaver disabled
+  studio       - high-clarity H.265 15M bitrate, show touches, screensaver disabled
+  camera       - mirror device camera (Android 12+) instead of screen
+  desktop      - launch a clean 16:9 virtual desktop (1920x1080/160, IME hidden, 1280x720 window)
+  audio-only   - stream device audio only without video window
+  low-latency  - fast response over slow Wi-Fi (max-size 1024, 4M bitrate, 60 FPS)
+  otg          - OTG mode (use computer keyboard/mouse on phone via USB without video)
+EOF
+}
+
+show_banner() {
+  cat <<'EOF'
+┌──────────────────────────────────────────────┐
+│                 scrcpy-plus                  │
+│         smarter mirror launcher v3           │
+│       Dev: Subuh Kurniawan                   │
+│       Email: kurrniawansubuh@gmail.com       │
+└──────────────────────────────────────────────┘
+EOF
+}
+
+show_howto_cmd() {
+  cat <<'EOF'
+======================================================================
+  scrcpy-plus v3 — Panduan Penggunaan (How-To) & Info Developer
+  Developer : Subuh Kurniawan
+  Email     : kurrniawansubuh@gmail.com
+======================================================================
+
+[1] PERSIAPAN AWAL DI HP ANDROID:
+  1. Buka Pengaturan -> Tentang Ponsel -> Ketuk 'Nomor Bentukan' (Build Number) 7x.
+  2. Buka Pengaturan -> Opsi Pengembang (Developer Options) -> Aktifkan 'USB Debugging'.
+  3. Aktifkan juga 'USB debugging (Security settings)' / 'Disable permission monitoring'.
+
+[2] KONEKSI WI-FI ADB (TANPA KABEL):
+  - Otomatis via USB  : ./scrcpy-plus --wireless
+  - Scan LAN & mDNS   : ./scrcpy-plus --scan-wifi
+  - Pairing Kode 6D   : ./scrcpy-plus --pair IP:PORT KODE
+
+[3] MODE SAMSUNG DeX (JENDELA TUNGGAL LANDSCAPE & MULTI-APP):
+  - Buka GUI DeX      : ./scrcpy-plus --gui
+  - CLI DeX Landscape : ./scrcpy-plus --profile desktop --start-app +?chrome
+  - Ganti App di DeX  : ./scrcpy-plus --launch-on-display auto com.whatsapp --landscape
+
+[4] DIAGNOSTIK & AUTO-FIX ADB:
+  - System Doctor     : ./scrcpy-plus --doctor
+======================================================================
+EOF
+}
+
+usage() {
+  cat <<EOF
+scrcpy-plus
+A comprehensive wrapper around scrcpy 3.x with profiles, camera/virtual-display support,
+audio tuning, HID/OTG controls, and ADB quick utilities.
+
+Usage: ./scrcpy-plus [options] [-- <extra scrcpy arguments>]
+
+Launcher & Info Options:
+  --profile NAME             Use a preset profile (see --list-profiles)
+  --list-profiles            Show available profiles
+  --menu                     Interactive terminal launcher menu
+  --gui                      Open the native macOS scrcpy-plus-gui application
+  --status                   Show connected ADB devices and status
+  --device-info              Show detailed device info (model, Android, battery, IP, size)
+  --install                  Install a symlink into ~/.local/bin/scrcpy-plus
+  --config PATH              Load custom config file
+  --adb PATH                 Path to adb binary
+  --howto, --about           Show step-by-step How-To guide and developer info
+  --help                     Show this help message
+
+Connection & Device Selection:
+  -s, --serial SERIAL        Select device by serial number
+  -d, --usb                  Use USB device only
+  --wireless                 Auto-bridge USB device to Wi-Fi (ADB TCP/IP) and connect
+  --scan-wifi                Scan local Wi-Fi network (mDNS, ARP, Port 5555) for Android ADB devices
+  --tcpip [IP[:PORT]]        Connect over TCP/IP via scrcpy --tcpip (auto or explicit IP)
+  --pair IP:PORT [CODE]      Pair device over Wi-Fi (Android 11+ wireless debugging)
+  --disconnect [IP[:PORT]]   Disconnect ADB TCP/IP device(s)
+
+Video & Display Options:
+  --bitrate RATE             Video bitrate (e.g., 8M, 20M)
+  --fps N                    Limit capture frame rate (--max-fps)
+  --max-size N               Limit max width/height resolution (e.g., 1080, 1920)
+  --video-codec CODEC        Video codec: h264, h265, av1
+  --video-encoder NAME       Specific MediaCodec video encoder
+  --video-source SRC         Video source: display, camera
+  --display-id ID            Target display ID to mirror
+  --orientation VAL          Display & record orientation: 0, 90, 180, 270, flip0..flip270
+  --capture-orientation VAL  Capture orientation (prefix with @ to lock, e.g. @90)
+  --angle DEG                Rotate video content by custom clockwise angle in degrees
+  --crop W:H:X:Y             Crop device screen on server
+  --video-buffer MS          Video buffering delay in ms (default: 0)
+  --render-driver NAME       SDL render driver: metal, opengl, opengles2, software
+  --no-video                 Disable video forwarding (audio only)
+  --no-window                Disable scrcpy window
+  --new-display [W×H[/DPI]]  Create a virtual display (e.g., 1920x1080/160 or empty for default)
+  --no-vd-destroy-content    Keep running apps alive on main screen when virtual display closes
+  --no-vd-system-decorations Disable system decorations/navbar on virtual display (cleaner app window)
+  --display-ime-policy POL   IME policy: local, fallback, hide
+
+Camera Options (Android 12+):
+  --camera-facing DIR        Camera facing: front, back, external
+  --camera-id ID             Camera ID to mirror (see --list-cameras)
+  --camera-size WxH          Explicit camera capture size (e.g., 1920x1080)
+  --camera-ar AR             Camera aspect ratio (e.g., 16:9, 4:3, sensor)
+  --camera-fps N             Camera capture FPS
+  --camera-high-speed        Enable high-speed camera capture mode
+
+Audio Options:
+  --no-audio                 Disable audio forwarding
+  --audio-source SRC         Audio source: output, playback, mic, mic-unprocessed,
+                             mic-camcorder, mic-voice-recognition, mic-voice-communication,
+                             voice-call, voice-call-uplink, voice-call-downlink, voice-performance
+  --audio-codec CODEC        Audio codec: opus, aac, flac, raw
+  --audio-encoder NAME       Specific MediaCodec audio encoder
+  --audio-bitrate RATE       Audio bitrate (e.g., 128K, 256K)
+  --audio-buffer MS          Audio buffering delay in ms (default: 50)
+  --audio-output-buffer MS   SDL audio output buffer in ms (default: 5)
+  --audio-dup                Duplicate audio on device and computer (auto-enables playback source)
+  --require-audio            Fail if audio capture does not work on device
+
+Recording Options:
+  --record PATH              Save screen/audio recording to PATH
+  --record-format FMT        Force format: mp4, mkv, m4a, mka, opus, aac, flac, wav
+  --record-orientation VAL   Recording orientation: 0, 90, 180, 270
+  --no-playback              Disable local playback while recording (-N)
+  --time-limit SEC           Stop session automatically after SEC seconds
+
+Input, Control & Peripherals:
+  --no-control               Read-only mirror (disable mouse/keyboard control)
+  --show-touches             Display physical touch indicators on device
+  --keyboard MODE            Keyboard input mode: sdk, uhid, aoa, disabled
+  --mouse MODE               Mouse input mode: sdk, uhid, aoa, disabled
+  --gamepad MODE             Gamepad input mode: uhid, aoa, disabled
+  --otg                      Run in USB OTG mode (keyboard/mouse without ADB/video)
+  --prefer-text              Inject alpha keys as text events
+  --raw-key-events           Inject raw key events for all keys
+  --no-key-repeat            Do not forward repeated key events when held
+  --legacy-paste             Inject clipboard paste as key events
+  --no-clipboard-autosync    Disable automatic clipboard sync
+  --no-mouse-hover           Do not forward mouse hover motion events
+  --shortcut-mod MODS        Shortcut modifiers (e.g., lalt,lsuper,lctrl)
+  --push-target PATH         Target directory on device for drag & drop (default: /sdcard/Download/)
+
+Window & Power Management:
+  --fullscreen               Start in fullscreen
+  --windowed                 Start in normal desktop window
+  --borderless               Remove window border (--window-borderless)
+  --always-on-top            Keep window above other windows
+  --title TEXT               Set custom window title
+  --window-x X               Initial window X position
+  --window-y Y               Initial window Y position
+  --window-width W           Initial window width
+  --window-height H          Initial window height
+  --stay-awake               Keep device awake while plugged in (-w)
+  --screen-off, --phone-off  Turn phone screen off immediately while mirroring (-S)
+  --power-off-on-close       Turn phone screen off when scrcpy closes
+  --no-power-on              Do not power on device when starting scrcpy
+  --screen-off-timeout SEC   Set device screen-off timeout while scrcpy runs
+  --disable-screensaver      Disable computer screensaver while running
+  --kill-adb-on-close        Kill ADB daemon when scrcpy closes
+  --print-fps                Print framerate logs to console
+
+App Launch & ADB Quick Utilities:
+  --start-app NAME           Launch Android app on start (prefix ? for name search, + to force-stop)
+  --list-apps                List installed Android apps on device
+  --list-displays            List available display IDs on device
+  --list-cameras             List available camera IDs on device
+  --list-camera-sizes        List valid camera capture sizes on device
+  --list-encoders            List available video and audio encoders on device
+  --screenshot [PATH]        Take a device screenshot and save locally (default: ~/Desktop)
+  --install-apk PATH         Install an APK file onto the connected device
+  --push SRC [DEST]          Push a local file to the device (default: /sdcard/Download/)
+  --send-text TEXT           Type text on the connected device via ADB
+  --keyevent KEY             Send an Android keyevent (e.g., HOME, BACK, POWER, 24, 25)
+
+Examples:
+  ./scrcpy-plus --profile gaming --fps 60 --bitrate 20M
+  ./scrcpy-plus --profile camera --camera-facing front --camera-size 1920x1080
+  ./scrcpy-plus --profile desktop --start-app ?chrome
+  ./scrcpy-plus --profile recording --record ~/Desktop/demo.mp4 --audio-dup
+  ./scrcpy-plus --screenshot ~/Desktop/phone.png
+  ./scrcpy-plus --device-info
+EOF
+}
+
+run_adb() {
+  if [[ -n "$serial" ]]; then
+    "$ADB_BIN" -s "$serial" "$@"
+  elif [[ "$select_usb" -eq 1 ]]; then
+    "$ADB_BIN" -d "$@"
+  else
+    "$ADB_BIN" "$@"
+  fi
+}
+
+ensure_adb() {
+  if [[ -z "$ADB_BIN" || ( ! -x "$ADB_BIN" && ! -f "$ADB_BIN" ) ]]; then
+    echo "Error: ADB binary not found: $ADB_BIN" >&2
+    exit 1
+  fi
+}
+
+show_status_cmd() {
+  ensure_adb
+  echo "ADB binary: $ADB_BIN"
+  echo "scrcpy binary: $SCRCPY_BIN"
+  if ! "$ADB_BIN" version >/dev/null 2>&1; then
+    echo "ADB is not available or not working correctly." >&2
+    exit 1
+  fi
+  echo ""
+  "$ADB_BIN" devices -l
+}
+
+detect_device_wifi_ip() {
+  local ip=""
+  # Stage 1: Direct IPv4 address on wlan0 / wlan1 / ap0 / swlan0 (Accurate on Android 12/13/14/15 even when Mobile Data is on)
+  ip="$(run_adb shell ip -f inet addr show wlan0 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]; exit}' | tr -d '\r ')"
+  if [[ -z "$ip" ]]; then
+    ip="$(run_adb shell ip -f inet addr show 2>/dev/null | awk '
+      /^[0-9]+: (wlan|ap|swlan|eth|rndis)/ { iface=1; next }
+      /^[0-9]+: / { iface=0 }
+      iface && /inet / { split($2,a,"/"); print a[1]; exit }
+    ' | tr -d '\r ')"
+  fi
+  # Stage 2: Per-interface routing table for wlan0 (Android 13+ policy routing)
+  if [[ -z "$ip" ]]; then
+    ip="$(run_adb shell ip route show table wlan0 2>/dev/null | awk '/src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' | tr -d '\r ')"
+  fi
+  # Stage 3: Main routing table filtered for wlan
+  if [[ -z "$ip" ]]; then
+    ip="$(run_adb shell ip route 2>/dev/null | awk '/wlan/ && /src/ {for(i=1;i<=NF;i++) if($i=="src") {print $(i+1); exit}}' | tr -d '\r ')"
+  fi
+  # Stage 4: ifconfig / getprop fallback
+  if [[ -z "$ip" ]]; then
+    ip="$(run_adb shell ifconfig wlan0 2>/dev/null | awk '/inet addr:/{sub(/addr:/,"",$2); print $2; exit} /inet /{print $2; exit}' | tr -d '\r ')"
+  fi
+  if [[ -z "$ip" ]]; then
+    ip="$(run_adb shell getprop dhcp.wlan0.ipaddress 2>/dev/null | tr -d '\r ')"
+  fi
+  # Stage 5: Any private LAN IPv4 address (192.168.x.x / 10.x.x.x / 172.16-31.x.x) from ip -f inet addr
+  if [[ -z "$ip" ]]; then
+    ip="$(run_adb shell ip -f inet addr show 2>/dev/null | awk '/inet (192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ {split($2,a,"/"); print a[1]; exit}' | tr -d '\r ')"
+  fi
+  echo "$ip"
+}
+
+scan_wifi_cmd() {
+  ensure_adb
+  "$ADB_BIN" start-server >/dev/null 2>&1 || true
+
+  local mac_ip=""
+  mac_ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || ifconfig 2>/dev/null | awk '/inet (192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/ && $2 != "127.0.0.1" {print $2; exit}')"
+  echo "MAC_IP:${mac_ip:--}"
+
+  # 0. List any already-connected TCP/IP ADB devices
+  "$ADB_BIN" devices 2>/dev/null | awk 'NR>1 && $1 ~ /:[0-9]+$/ && $2 == "device" { print "FOUND:" $1 " (Connected Wi-Fi ADB)" }' || true
+
+  # 1. If a USB device is attached, check its wlan0 IP directly and warm up ARP from phone -> Mac!
+  if run_adb get-state >/dev/null 2>&1; then
+    local usb_ip
+    usb_ip="$(detect_device_wifi_ip)"
+    if [[ -n "$usb_ip" ]]; then
+      if [[ -n "$mac_ip" && "$mac_ip" != "-" ]]; then
+        run_adb shell "ping -c 2 -W 1 $mac_ip >/dev/null 2>&1" || true
+      fi
+      echo "FOUND:${usb_ip}:5555 (USB Device Wi-Fi IP)"
+    fi
+  fi
+
+  # 2. Check Android 11+ Wireless Debugging mDNS services via adb mdns services
+  local mdns_out
+  mdns_out="$("$ADB_BIN" mdns services 2>/dev/null | tr -d '\r' || true)"
+  if [[ -n "$mdns_out" ]]; then
+    echo "$mdns_out" | awk '/_adb/ {
+      for (i=1; i<=NF; i++) {
+        if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$/) {
+          print "FOUND:" $i " (mDNS Wireless Debugging)"
+        }
+      }
+    }'
+  fi
+
+  # 3. Scan active ARP neighbor table + fast subnet DHCP range (.2..35, .100..130) for open TCP port 5555
+  local subnet_prefix=""
+  if [[ "$mac_ip" =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+    subnet_prefix="${BASH_REMATCH[1]}"
+  fi
+
+  if [[ -n "$subnet_prefix" ]]; then
+    local arp_ips
+    arp_ips="$(arp -a -n 2>/dev/null | grep -v 'incomplete' | awk -F'[()]' '/\([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\)/ {print $2}' | grep -v '\.255$' | sort -u || true)"
+
+    local sweep_list=()
+    for ip in $arp_ips; do
+      [[ "$ip" != "$mac_ip" && "$ip" != "${subnet_prefix}.1" ]] && sweep_list+=("$ip")
+    done
+    for host_num in {2..30} {100..120}; do
+      local cand="${subnet_prefix}.${host_num}"
+      if [[ "$cand" != "$mac_ip" ]]; then
+        sweep_list+=("$cand")
+      fi
+    done
+
+    local unique_ips
+    unique_ips="$(printf "%s\n" "${sweep_list[@]}" | awk '!seen[$0]++')"
+
+    for ip in $unique_ips; do
+      (
+        if nc -G 1 -w 1 -z "$ip" 5555 >/dev/null 2>&1; then
+          echo "FOUND:${ip}:5555 (LAN Port 5555 Open)"
+        fi
+      ) &
+    done
+    wait
+  fi
+}
+
+show_device_info_cmd() {
+  ensure_adb
+  if ! run_adb get-state >/dev/null 2>&1; then
+    echo "Error: No active ADB device found. Connect a device or specify --serial." >&2
+    exit 1
+  fi
+  local model manufacturer android_ver sdk_ver serial_no battery_lvl wm_size ip_addr
+  manufacturer="$(run_adb shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r')"
+  model="$(run_adb shell getprop ro.product.model 2>/dev/null | tr -d '\r')"
+  android_ver="$(run_adb shell getprop ro.build.version.release 2>/dev/null | tr -d '\r')"
+  sdk_ver="$(run_adb shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')"
+  serial_no="$(run_adb get-serialno 2>/dev/null | tr -d '\r')"
+  battery_lvl="$(run_adb shell dumpsys battery 2>/dev/null | awk -F': ' '/level:/ {print $2; exit}' | tr -d '\r')"
+  wm_size="$(run_adb shell wm size 2>/dev/null | awk -F': ' '/Physical size:/ {print $2; exit}' | tr -d '\r')"
+  ip_addr="$(detect_device_wifi_ip)"
+
+  echo "Device Information:"
+  echo "  Serial       : ${serial_no:-unknown}"
+  echo "  Device       : ${manufacturer:-unknown} ${model:-unknown}"
+  echo "  Android      : ${android_ver:-unknown} (API ${sdk_ver:-?})"
+  echo "  Screen Size  : ${wm_size:-unknown}"
+  echo "  Battery      : ${battery_lvl:+${battery_lvl}%}${battery_lvl:-unknown}"
+  echo "  Wi-Fi IP     : ${ip_addr:-not detected (check Wi-Fi on phone)}"
+}
+
+take_screenshot_cmd() {
+  ensure_adb
+  local out="$screenshot_path"
+  if [[ -z "$out" ]]; then
+    out="$HOME/Desktop/scrcpy-screenshot-$(date +%Y%m%d-%H%M%S).png"
+  fi
+  mkdir -p "$(dirname "$out")"
+  if [[ -n "$screenshot_display_id" ]]; then
+    local target_did="$screenshot_display_id"
+    if [[ "$target_did" == "auto" ]]; then
+      target_did="$(detect_virtual_display_id)"
+    fi
+    if [[ -n "$target_did" && "$target_did" != "0" ]]; then
+      if run_adb exec-out screencap -d "$target_did" -p > "$out"; then
+        echo "DeX Screenshot (Display #$target_did) saved to: $out"
+        return 0
+      fi
+    fi
+  fi
+  if run_adb exec-out screencap -p > "$out"; then
+    echo "Screenshot saved to: $out"
+  else
+    rm -f "$out"
+    echo "Error: Failed to capture screenshot from device." >&2
+    exit 1
+  fi
+}
+
+list_files_cmd() {
+  ensure_adb
+  local dir="${list_files_dir:-/sdcard/Download}"
+  run_adb shell "ls -1p '$dir' 2>/dev/null | head -n 80" | tr -d '\r'
+}
+
+pull_file_cmd() {
+  ensure_adb
+  mkdir -p "$pull_dest"
+  echo "Pulling $pull_src -> $pull_dest ..."
+  run_adb pull "$pull_src" "$pull_dest"
+}
+
+display_dpi_cmd() {
+  ensure_adb
+  local target_did="$display_dpi_id"
+  if [[ "$target_did" == "auto" || -z "$target_did" ]]; then
+    target_did="$(detect_virtual_display_id)"
+  fi
+  if [[ -z "$target_did" || "$target_did" == "0" ]]; then
+    echo "Error: Virtual display DeX belum aktif." >&2
+    exit 1
+  fi
+  if [[ "$display_dpi_val" == "reset" ]]; then
+    run_adb shell wm density reset -d "$target_did" >/dev/null 2>&1 || run_adb shell wm density -d "$target_did" reset >/dev/null 2>&1 || true
+    echo "DeX Display #$target_did DPI di-reset ke default"
+  else
+    run_adb shell wm density "$display_dpi_val" -d "$target_did" >/dev/null 2>&1 || run_adb shell wm density -d "$target_did" "$display_dpi_val" >/dev/null 2>&1 || true
+    echo "DeX Display #$target_did DPI diatur ke: $display_dpi_val"
+  fi
+}
+
+install_apk_cmd() {
+  ensure_adb
+  if [[ ! -f "$install_apk_path" ]]; then
+    echo "Error: APK file not found: $install_apk_path" >&2
+    exit 1
+  fi
+  echo "Installing $install_apk_path ..."
+  run_adb install -r "$install_apk_path"
+}
+
+push_file_cmd() {
+  ensure_adb
+  if [[ ! -e "$push_src" ]]; then
+    echo "Error: Source path not found: $push_src" >&2
+    exit 1
+  fi
+  echo "Pushing $push_src -> $push_dest ..."
+  run_adb push "$push_src" "$push_dest"
+}
+
+send_text_cmd() {
+  ensure_adb
+  local escaped="${send_text_val// /%s}"
+  run_adb shell input text "$escaped"
+  echo "Text sent to device."
+}
+
+keyevent_cmd() {
+  ensure_adb
+  run_adb shell input keyevent "$keyevent_val"
+  echo "Keyevent '$keyevent_val' sent."
+}
+
+detect_virtual_display_id() {
+  local did=""
+  # 1. Fast & accurate: parse dumpsys display for non-zero display IDs associated with scrcpy / virtual display
+  did="$(run_adb shell dumpsys window displays 2>/dev/null | awk '
+    /Display: mDisplayId=[1-9][0-9]*/ {
+      if (match($0, /mDisplayId=[0-9]+/)) {
+        val = substr($0, RSTART + 11, RLENGTH - 11)
+        last = val
+      }
+    }
+    END { if (last != "") print last }
+  ' | tr -d '\r ')"
+
+  # 2. Fallback: dumpsys display mDisplayId != 0
+  if [[ -z "$did" || "$did" == "0" ]]; then
+    did="$(run_adb shell dumpsys display 2>/dev/null | awk -F'[=,]' '/mDisplayId=[1-9][0-9]*/ {last=$2} END {print last}' | tr -d '\r ')"
+  fi
+
+  # 3. Fallback: scrcpy --list-displays
+  if [[ -z "$did" || "$did" == "0" ]]; then
+    did="$("$SCRCPY_BIN" ${serial:+-s "$serial"} --list-displays 2>&1 | awk -F'=' '/--display-id=/ && $2 !~ /^0 / {print $2}' | awk '{print $1}' | tail -n 1 | tr -d '\r ')"
+  fi
+
+  echo "$did"
+}
+
+wait_for_virtual_display_id() {
+  local target_did="$1"
+  if [[ -n "$target_did" && "$target_did" != "auto" && "$target_did" != "0" ]]; then
+    echo "$target_did"
+    return 0
+  fi
+  local attempt=0
+  local detected=""
+  while (( attempt < 10 )); do
+    detected="$(detect_virtual_display_id)"
+    if [[ -n "$detected" && "$detected" != "0" ]]; then
+      echo "$detected"
+      return 0
+    fi
+    sleep 0.35
+    (( attempt++ ))
+  done
+  echo ""
+}
+
+resolve_package_and_activity() {
+  local raw_query="$1"
+  local clean="${raw_query#+}"
+  clean="${clean#\?}"
+
+  local pkg="$clean"
+  # Verify if exact package exists; if not, search case-insensitively
+  if ! run_adb shell pm path "$pkg" >/dev/null 2>&1; then
+    pkg="$(run_adb shell pm list packages 2>/dev/null | sed 's/^package://' | tr -d '\r' | grep -i "$clean" | head -n 1)"
+  fi
+  if [[ -z "$pkg" ]]; then
+    echo ""
+    return 1
+  fi
+
+  local comp=""
+  comp="$(run_adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER "$pkg" 2>/dev/null | tail -n 1 | tr -d '\r ')"
+  if [[ "$comp" != */* ]]; then
+    comp="$(run_adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.INFO "$pkg" 2>/dev/null | tail -n 1 | tr -d '\r ')"
+  fi
+  if [[ "$comp" != */* ]]; then
+    comp="$(run_adb shell cmd package resolve-activity --brief "$pkg" 2>/dev/null | tail -n 1 | tr -d '\r ')"
+  fi
+  if [[ "$comp" != */* ]]; then
+    comp="$(run_adb shell dumpsys package "$pkg" 2>/dev/null | awk '/android.intent.action.MAIN:/{flag=1;next} flag && /\//{for(i=1;i<=NF;i++) if($i ~ /\//){print $i; exit}}' | tr -d '\r ')"
+  fi
+
+  echo "${pkg}|${comp}"
+}
+
+doctor_cmd() {
+  ensure_adb
+  echo "=== scrcpy-plus System & ADB Doctor ==="
+  echo "[1/5] Binary Check:"
+  echo "  scrcpy : $SCRCPY_BIN ($("$SCRCPY_BIN" --version 2>/dev/null | head -n 1 || echo 'missing'))"
+  echo "  adb    : $ADB_BIN ($("$ADB_BIN" --version 2>/dev/null | head -n 1 || echo 'missing'))"
+  echo "  server : ${SCRCPY_SERVER_PATH:-default}"
+
+  echo "[2/5] Healing Offline / Unauthorized ADB Connections..."
+  "$ADB_BIN" start-server >/dev/null 2>&1 || true
+  "$ADB_BIN" reconnect offline >/dev/null 2>&1 || true
+  "$ADB_BIN" devices -l 2>/dev/null || true
+
+  if run_adb get-state >/dev/null 2>&1; then
+    echo "[3/5] Device Health & Memory Telemetry:"
+    local batt_dump mem_dump temp_raw temp_c mem_total mem_avail
+    batt_dump="$(run_adb shell dumpsys battery 2>/dev/null | tr -d '\r')"
+    temp_raw="$(echo "$batt_dump" | awk -F': ' '/temperature:/ {print $2; exit}')"
+    if [[ -n "$temp_raw" && "$temp_raw" =~ ^[0-9]+$ ]]; then
+      temp_c="$(( temp_raw / 10 )).$(( temp_raw % 10 ))°C"
+    else
+      temp_c="unknown"
+    fi
+    mem_dump="$(run_adb shell cat /proc/meminfo 2>/dev/null | tr -d '\r')"
+    mem_total="$(echo "$mem_dump" | awk '/MemTotal:/ {printf "%.1f GB", $2/1048576}')"
+    mem_avail="$(echo "$mem_dump" | awk '/MemAvailable:/ {printf "%.1f GB", $2/1048576}')"
+    echo "  Battery Temp : $temp_c"
+    echo "  RAM Available: ${mem_avail:-?} / ${mem_total:-?}"
+
+    echo "[4/5] Optimizing Android Multi-Window & DeX Settings..."
+    run_adb shell settings put global force_resizable_activities 1 >/dev/null 2>&1 || true
+    run_adb shell settings put global enable_freeform_support 1 >/dev/null 2>&1 || true
+    echo "  force_resizable_activities = 1 (OK)"
+    echo "  enable_freeform_support    = 1 (OK)"
+
+    echo "[5/5] Active Virtual Displays:"
+    local vdid
+    vdid="$(detect_virtual_display_id)"
+    echo "  Active DeX Virtual Display ID: ${vdid:-none (Display 0 only)}"
+  else
+    echo "[!] No active Android device in 'device' state."
+  fi
+  echo "=== Doctor Selesai ==="
+}
+
+apply_display_rotation_internal() {
+  local target_did="$1"
+  local mode="$2"
+  [[ -n "$target_did" && "$target_did" != "0" ]] || return 0
+
+  # Check whether the virtual display's natural dimensions are already W >= H (landscape) or W < H (portrait)
+  local size_str=""
+  size_str="$(run_adb shell wm size -d "$target_did" 2>/dev/null | awk -F': ' '/size:/ {print $2}' | tail -n 1 | tr -d '\r ')"
+  local w=1920
+  local h=1080
+  if [[ "$size_str" =~ ^([0-9]+)x([0-9]+)$ ]]; then
+    w="${BASH_REMATCH[1]}"
+    h="${BASH_REMATCH[2]}"
+  fi
+
+  case "$mode" in
+    landscape|land|0)
+      run_adb shell settings put global force_resizable_activities 1 >/dev/null 2>&1 || true
+      run_adb shell wm fixed-to-user-rotation -d "$target_did" enabled >/dev/null 2>&1 || true
+      if (( w >= h )); then
+        run_adb shell wm user-rotation -d "$target_did" lock 0 >/dev/null 2>&1 || true
+      else
+        run_adb shell wm user-rotation -d "$target_did" lock 1 >/dev/null 2>&1 || true
+      fi
+      ;;
+    landscape-reverse|land-rev|180)
+      run_adb shell settings put global force_resizable_activities 1 >/dev/null 2>&1 || true
+      run_adb shell wm fixed-to-user-rotation -d "$target_did" enabled >/dev/null 2>&1 || true
+      if (( w >= h )); then
+        run_adb shell wm user-rotation -d "$target_did" lock 2 >/dev/null 2>&1 || true
+      else
+        run_adb shell wm user-rotation -d "$target_did" lock 3 >/dev/null 2>&1 || true
+      fi
+      ;;
+    portrait|port|90)
+      run_adb shell wm fixed-to-user-rotation -d "$target_did" enabled >/dev/null 2>&1 || true
+      if (( w >= h )); then
+        run_adb shell wm user-rotation -d "$target_did" lock 1 >/dev/null 2>&1 || true
+      else
+        run_adb shell wm user-rotation -d "$target_did" lock 0 >/dev/null 2>&1 || true
+      fi
+      ;;
+    auto|free)
+      run_adb shell wm fixed-to-user-rotation -d "$target_did" disabled >/dev/null 2>&1 || true
+      run_adb shell wm user-rotation -d "$target_did" free >/dev/null 2>&1 || true
+      ;;
+  esac
+}
+
+display_rotation_cmd() {
+  ensure_adb
+  local target_did
+  target_did="$(wait_for_virtual_display_id "$display_rotation_id")"
+  if [[ -z "$target_did" || "$target_did" == "0" ]]; then
+    echo "Error: Virtual display DeX belum aktif." >&2
+    exit 1
+  fi
+  apply_display_rotation_internal "$target_did" "$display_rotation_mode"
+  echo "DeX Display #$target_did orientation set to: $display_rotation_mode"
+}
+
+launch_on_display_cmd() {
+  ensure_adb
+  local target_did
+  target_did="$(wait_for_virtual_display_id "$launch_display_id")"
+  if [[ -z "$target_did" || "$target_did" == "0" ]]; then
+    echo "Error: Virtual display DeX belum aktif." >&2
+    exit 1
+  fi
+
+  if [[ "$launch_landscape" -eq 1 ]]; then
+    apply_display_rotation_internal "$target_did" "landscape"
+  fi
+
+  local query="$launch_display_app"
+  if [[ "$query" == +* ]]; then
+    launch_force_stop=1
+    query="${query#+}"
+  fi
+
+  local resolved
+  resolved="$(resolve_package_and_activity "$query")"
+  local pkg="${resolved%%|*}"
+  local comp="${resolved#*|}"
+
+  if [[ -z "$pkg" ]]; then
+    echo "Error: Tidak menemukan aplikasi '$query'" >&2
+    exit 1
+  fi
+
+  if [[ "$launch_force_stop" -eq 1 ]]; then
+    run_adb shell am force-stop "$pkg" >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$launch_freeform" -eq 1 ]]; then
+    run_adb shell settings put global enable_freeform_support 1 >/dev/null 2>&1 || true
+    run_adb shell settings put global force_resizable_activities 1 >/dev/null 2>&1 || true
+    if [[ "$comp" == */* ]]; then
+      run_adb shell am start --display "$target_did" --windowingMode 5 -n "$comp"
+    else
+      run_adb shell cmd activity start-activity --display "$target_did" --windowingMode 5 "$pkg"
+    fi
+  else
+    if [[ "$comp" == */* ]]; then
+      run_adb shell am start --display "$target_did" --activity-reorder-to-front -n "$comp"
+    else
+      run_adb shell cmd activity start-activity --display "$target_did" "$pkg"
+    fi
+  fi
+
+  if [[ "$launch_landscape" -eq 1 ]]; then
+    apply_display_rotation_internal "$target_did" "landscape"
+  fi
+  echo "Launched $pkg on DeX display #$target_did"
+}
+
+display_keyevent_cmd() {
+  ensure_adb
+  local target_did="$display_keyevent_id"
+  if [[ "$target_did" == "auto" || -z "$target_did" ]]; then
+    target_did="$(detect_virtual_display_id)"
+  fi
+  if [[ -n "$target_did" && "$target_did" != "0" ]]; then
+    run_adb shell input -d "$target_did" keyevent "$display_keyevent_val"
+  else
+    run_adb shell input keyevent "$display_keyevent_val"
+  fi
+}
+
+install_launcher_cmd() {
+  local install_dir="$HOME/.local/bin"
+  mkdir -p "$install_dir"
+  ln -sf "$SCRIPT_DIR/scrcpy-plus" "$install_dir/scrcpy-plus"
+  export PATH="$install_dir:$PATH"
+  echo "Installed launcher to: $install_dir/scrcpy-plus"
+  echo "You can now run: scrcpy-plus --help"
+}
+
+interactive_menu_cmd() {
+  show_banner
+  echo "Choose a profile:"
+  select choice in default gaming recording presentation productivity debug windowed private studio camera desktop audio-only low-latency otg quit; do
+    case "$choice" in
+      quit)
+        exit 0
+        ;;
+      default|gaming|recording|presentation|productivity|debug|windowed|private|studio|camera|desktop|audio-only|low-latency|otg)
+        profile="$choice"
+        break
+        ;;
+      *)
+        echo "Invalid option."
+        ;;
+    esac
+  done
+
+  echo "Enable Wi-Fi mode? [y/N]"
+  read -r answer
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    wireless=1
+  fi
+
+  if [[ "$profile" == "camera" ]]; then
+    echo "Camera facing (back/front/external) [back]:"
+    read -r answer
+    camera_facing="${answer:-back}"
+  elif [[ "$profile" != "audio-only" && "$profile" != "otg" ]]; then
+    echo "Use fullscreen? [Y/n]"
+    read -r answer
+    if [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]; then
+      fullscreen=1
+    else
+      windowed=1
+    fi
+
+    echo "Show touch indicators? [Y/n]"
+    read -r answer
+    if [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]; then
+      show_touches=1
+    fi
+
+    echo "Keep device awake? [y/N]"
+    read -r answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      stay_awake=1
+    fi
+
+    echo "Turn phone screen off while mirroring? [y/N]"
+    read -r answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+      screen_off=1
+    fi
+  fi
+
+  echo "Record to a file? [y/N]"
+  read -r answer
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    echo "Enter record path (blank for default):"
+    read -r record_path
+    if [[ -z "$record_path" ]]; then
+      record_path="$HOME/Desktop/scrcpy-$(date +%Y%m%d-%H%M%S).mp4"
+    fi
+  fi
+
+  echo "Custom window title? (blank to skip)"
+  read -r window_title
+}
+
+prepare_wireless() {
+  if [[ "$wireless" -ne 1 ]]; then
+    return 0
+  fi
+
+  ensure_adb
+
+  if ! run_adb get-state >/dev/null 2>&1; then
+    echo "No ADB device connected. Connect your phone via USB or Wi-Fi first." >&2
+    exit 1
+  fi
+
+  # Check if already connected purely via TCP/IP
+  local current_serial
+  current_serial="$(run_adb get-serialno 2>/dev/null | tr -d '\r' || true)"
+  if [[ "$current_serial" == *:* ]]; then
+    echo "Already connected over Wi-Fi ($current_serial)." >&2
+    return 0
+  fi
+
+  local ip
+  ip="$(detect_device_wifi_ip)"
+  if [[ -z "$ip" ]]; then
+    echo "Unable to detect device Wi-Fi IP on wlan0, falling back to scrcpy --tcpip..." >&2
+    tcpip_addr="auto"
+    wireless=0
+    return 0
+  fi
+
+  local mac_ip=""
+  mac_ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+  if [[ -n "$mac_ip" ]]; then
+    # Warm up reverse ARP from Android phone to Mac so hotspot/router populates ARP immediately
+    run_adb shell "ping -c 2 -W 1 $mac_ip >/dev/null 2>&1" || true
+  fi
+
+  run_adb tcpip 5555 >/dev/null 2>&1 || true
+  sleep 1
+  if [[ -n "$mac_ip" ]]; then
+    run_adb shell "ping -c 1 -W 1 $mac_ip >/dev/null 2>&1" || true
+  fi
+  ping -c 1 -t 1 "$ip" >/dev/null 2>&1 || true
+
+  local conn_out=""
+  conn_out="$("$ADB_BIN" connect "${ip}:5555" 2>&1 || true)"
+  if [[ "$conn_out" == *"No route to host"* || "$conn_out" == *"cannot connect"* || "$conn_out" == *"failed to connect"* ]]; then
+    "$ADB_BIN" kill-server >/dev/null 2>&1 || true
+    "$ADB_BIN" start-server >/dev/null 2>&1 || true
+    "$ADB_BIN" connect "${ip}:5555" >/dev/null 2>&1 || true
+  fi
+  serial="${ip}:5555"
+}
+
+apply_profile() {
+  case "$profile" in
+    ""|default)
+      ;;
+    gaming)
+      if [[ "$windowed" -eq 0 ]]; then fullscreen=1; fi
+      scrcpy_args+=(--show-touches --disable-screensaver)
+      if [[ -z "$bitrate" ]]; then bitrate="20M"; fi
+      if [[ -z "$fps" ]]; then fps="60"; fi
+      ;;
+    recording)
+      if [[ -z "$record_path" ]]; then
+        record_path="$HOME/Desktop/scrcpy-$(date +%Y%m%d-%H%M%S).mp4"
+      fi
+      if [[ -z "$bitrate" ]]; then bitrate="30M"; fi
+      if [[ -z "$audio_source" ]]; then audio_source="output"; fi
+      ;;
+    presentation)
+      if [[ "$windowed" -eq 0 ]]; then fullscreen=1; fi
+      scrcpy_args+=(--show-touches)
+      if [[ -z "$bitrate" ]]; then bitrate="12M"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy presentation"; fi
+      ;;
+    productivity)
+      stay_awake=1
+      if [[ -z "$bitrate" ]]; then bitrate="8M"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy productivity"; fi
+      ;;
+    debug)
+      scrcpy_args+=(--show-touches --disable-screensaver --print-fps)
+      if [[ -z "$bitrate" ]]; then bitrate="10M"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy debug"; fi
+      ;;
+    windowed)
+      windowed=1
+      if [[ -z "$window_title" ]]; then window_title="scrcpy windowed"; fi
+      if [[ -z "$bitrate" ]]; then bitrate="9M"; fi
+      ;;
+    private)
+      scrcpy_args+=(--disable-screensaver -S --power-off-on-close)
+      show_touches=0
+      if [[ -z "$window_title" ]]; then window_title="scrcpy private"; fi
+      ;;
+    studio)
+      scrcpy_args+=(--show-touches --disable-screensaver)
+      if [[ -z "$video_codec" ]]; then video_codec="h265"; fi
+      if [[ -z "$bitrate" ]]; then bitrate="15M"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy studio"; fi
+      ;;
+    camera|webcam)
+      video_source="camera"
+      if [[ -z "$camera_facing" ]]; then camera_facing="back"; fi
+      if [[ -z "$camera_size" && -z "$camera_ar" ]]; then camera_size="1920x1080"; fi
+      if [[ -z "$camera_fps" ]]; then camera_fps="30"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy camera"; fi
+      ;;
+    desktop|dex)
+      use_new_display=1
+      if [[ -z "$new_display" ]]; then new_display="1280x800/180"; fi
+      no_vd_destroy_content=1
+      no_vd_system_decorations=1
+      if [[ -z "$display_ime_policy" ]]; then display_ime_policy="hide"; fi
+      if [[ "$fullscreen" -eq 0 && -z "$window_width" && -z "$window_height" ]]; then
+        window_width="1280"
+        window_height="800"
+      fi
+      if [[ -z "$bitrate" ]]; then bitrate="16M"; fi
+      if [[ -z "$fps" ]]; then fps="60"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy DeX Desktop"; fi
+      if [[ -z "$start_app" ]]; then
+        start_app="+com.android.settings"
+      elif [[ "$start_app" != +* ]]; then
+        start_app="+$start_app"
+      fi
+      ;;
+    audio-only)
+      no_video=1
+      no_window=1
+      if [[ -z "$audio_source" ]]; then audio_source="output"; fi
+      ;;
+    low-latency)
+      if [[ -z "$max_size" ]]; then max_size="1024"; fi
+      if [[ -z "$bitrate" ]]; then bitrate="4M"; fi
+      if [[ -z "$fps" ]]; then fps="60"; fi
+      if [[ -z "$window_title" ]]; then window_title="scrcpy low-latency"; fi
+      ;;
+    otg)
+      otg_mode=1
+      ;;
+    *)
+      echo "Unknown profile: $profile" >&2
+      list_available_profiles >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Load default config BEFORE parsing CLI arguments so CLI arguments take precedence
+load_config "$CONFIG_FILE"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      [[ $# -ge 2 ]] || { echo "Missing value for --profile" >&2; exit 1; }
+      profile="$2"
+      shift 2
+      ;;
+    -s|--serial)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      serial="$2"
+      shift 2
+      ;;
+    -d|--usb)
+      select_usb=1
+      shift
+      ;;
+    --wireless)
+      wireless=1
+      shift
+      ;;
+    --tcpip)
+      if [[ $# -ge 2 && "$2" != --* ]]; then
+        tcpip_addr="$2"
+        shift 2
+      else
+        tcpip_addr="auto"
+        shift
+      fi
+      ;;
+    --tcpip=*)
+      tcpip_addr="${1#*=}"
+      shift
+      ;;
+    --pair)
+      [[ $# -ge 2 ]] || { echo "Missing IP:PORT for --pair" >&2; exit 1; }
+      pair_addr="$2"
+      if [[ $# -ge 3 && "$3" != --* ]]; then
+        pair_code="$3"
+        shift 3
+      else
+        shift 2
+      fi
+      ;;
+    --disconnect)
+      if [[ $# -ge 2 && "$2" != --* ]]; then
+        disconnect_addr="$2"
+        shift 2
+      else
+        disconnect_addr="all"
+        shift
+      fi
+      ;;
+    --record|-r)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      record_path="$2"
+      shift 2
+      ;;
+    --record-format)
+      [[ $# -ge 2 ]] || { echo "Missing value for --record-format" >&2; exit 1; }
+      record_format="$2"
+      shift 2
+      ;;
+    --record-orientation)
+      [[ $# -ge 2 ]] || { echo "Missing value for --record-orientation" >&2; exit 1; }
+      record_orientation="$2"
+      shift 2
+      ;;
+    --no-playback|-N)
+      no_playback=1
+      shift
+      ;;
+    --time-limit)
+      [[ $# -ge 2 ]] || { echo "Missing value for --time-limit" >&2; exit 1; }
+      time_limit="$2"
+      shift 2
+      ;;
+    --bitrate|-b)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      bitrate="$2"
+      shift 2
+      ;;
+    --fps|--max-fps)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      fps="$2"
+      shift 2
+      ;;
+    --max-size|-m)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      max_size="$2"
+      shift 2
+      ;;
+    --video-codec)
+      [[ $# -ge 2 ]] || { echo "Missing value for --video-codec" >&2; exit 1; }
+      video_codec="$2"
+      shift 2
+      ;;
+    --video-encoder)
+      [[ $# -ge 2 ]] || { echo "Missing value for --video-encoder" >&2; exit 1; }
+      video_encoder="$2"
+      shift 2
+      ;;
+    --video-source)
+      [[ $# -ge 2 ]] || { echo "Missing value for --video-source" >&2; exit 1; }
+      video_source="$2"
+      shift 2
+      ;;
+    --display-id)
+      [[ $# -ge 2 ]] || { echo "Missing value for --display-id" >&2; exit 1; }
+      display_id="$2"
+      shift 2
+      ;;
+    --orientation)
+      [[ $# -ge 2 ]] || { echo "Missing value for --orientation" >&2; exit 1; }
+      orientation="$2"
+      shift 2
+      ;;
+    --capture-orientation)
+      [[ $# -ge 2 ]] || { echo "Missing value for --capture-orientation" >&2; exit 1; }
+      capture_orientation="$2"
+      shift 2
+      ;;
+    --angle)
+      [[ $# -ge 2 ]] || { echo "Missing value for --angle" >&2; exit 1; }
+      angle="$2"
+      shift 2
+      ;;
+    --crop)
+      [[ $# -ge 2 ]] || { echo "Missing value for --crop" >&2; exit 1; }
+      crop="$2"
+      shift 2
+      ;;
+    --video-buffer)
+      [[ $# -ge 2 ]] || { echo "Missing value for --video-buffer" >&2; exit 1; }
+      video_buffer="$2"
+      shift 2
+      ;;
+    --render-driver)
+      [[ $# -ge 2 ]] || { echo "Missing value for --render-driver" >&2; exit 1; }
+      render_driver="$2"
+      shift 2
+      ;;
+    --no-video)
+      no_video=1
+      shift
+      ;;
+    --no-window)
+      no_window=1
+      shift
+      ;;
+    --new-display)
+      use_new_display=1
+      if [[ $# -ge 2 && "$2" != --* ]]; then
+        new_display="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --new-display=*)
+      use_new_display=1
+      new_display="${1#*=}"
+      shift
+      ;;
+    --no-vd-destroy-content)
+      no_vd_destroy_content=1
+      shift
+      ;;
+    --no-vd-system-decorations)
+      no_vd_system_decorations=1
+      shift
+      ;;
+    --display-ime-policy)
+      [[ $# -ge 2 ]] || { echo "Missing value for --display-ime-policy" >&2; exit 1; }
+      display_ime_policy="$2"
+      shift 2
+      ;;
+    --camera-facing)
+      [[ $# -ge 2 ]] || { echo "Missing value for --camera-facing" >&2; exit 1; }
+      camera_facing="$2"
+      video_source="camera"
+      shift 2
+      ;;
+    --camera-id)
+      [[ $# -ge 2 ]] || { echo "Missing value for --camera-id" >&2; exit 1; }
+      camera_id="$2"
+      video_source="camera"
+      shift 2
+      ;;
+    --camera-size)
+      [[ $# -ge 2 ]] || { echo "Missing value for --camera-size" >&2; exit 1; }
+      camera_size="$2"
+      video_source="camera"
+      shift 2
+      ;;
+    --camera-ar)
+      [[ $# -ge 2 ]] || { echo "Missing value for --camera-ar" >&2; exit 1; }
+      camera_ar="$2"
+      video_source="camera"
+      shift 2
+      ;;
+    --camera-fps)
+      [[ $# -ge 2 ]] || { echo "Missing value for --camera-fps" >&2; exit 1; }
+      camera_fps="$2"
+      video_source="camera"
+      shift 2
+      ;;
+    --camera-high-speed)
+      camera_high_speed=1
+      video_source="camera"
+      shift
+      ;;
+    --no-audio)
+      no_audio=1
+      shift
+      ;;
+    --audio-source)
+      [[ $# -ge 2 ]] || { echo "Missing value for --audio-source" >&2; exit 1; }
+      audio_source="$2"
+      shift 2
+      ;;
+    --audio-codec)
+      [[ $# -ge 2 ]] || { echo "Missing value for --audio-codec" >&2; exit 1; }
+      audio_codec="$2"
+      shift 2
+      ;;
+    --audio-encoder)
+      [[ $# -ge 2 ]] || { echo "Missing value for --audio-encoder" >&2; exit 1; }
+      audio_encoder="$2"
+      shift 2
+      ;;
+    --audio-bitrate|--audio-bit-rate)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      audio_bitrate="$2"
+      shift 2
+      ;;
+    --audio-buffer)
+      [[ $# -ge 2 ]] || { echo "Missing value for --audio-buffer" >&2; exit 1; }
+      audio_buffer="$2"
+      shift 2
+      ;;
+    --audio-output-buffer)
+      [[ $# -ge 2 ]] || { echo "Missing value for --audio-output-buffer" >&2; exit 1; }
+      audio_output_buffer="$2"
+      shift 2
+      ;;
+    --audio-dup)
+      audio_dup=1
+      shift
+      ;;
+    --require-audio)
+      require_audio=1
+      shift
+      ;;
+    --show-touches|-t)
+      show_touches=1
+      shift
+      ;;
+    --fullscreen|-f)
+      fullscreen=1
+      shift
+      ;;
+    --windowed)
+      windowed=1
+      fullscreen=0
+      shift
+      ;;
+    --stay-awake|-w)
+      stay_awake=1
+      shift
+      ;;
+    --screen-off|--phone-off|-S)
+      screen_off=1
+      shift
+      ;;
+    --power-off-on-close)
+      power_off_on_close=1
+      shift
+      ;;
+    --no-power-on)
+      no_power_on=1
+      shift
+      ;;
+    --screen-off-timeout)
+      [[ $# -ge 2 ]] || { echo "Missing value for --screen-off-timeout" >&2; exit 1; }
+      screen_off_timeout="$2"
+      shift 2
+      ;;
+    --no-control|-n)
+      no_control=1
+      shift
+      ;;
+    --disable-screensaver)
+      disable_screensaver=1
+      shift
+      ;;
+    --borderless|--window-borderless)
+      borderless=1
+      shift
+      ;;
+    --always-on-top)
+      always_on_top=1
+      shift
+      ;;
+    --title|--window-title)
+      [[ $# -ge 2 ]] || { echo "Missing value for $1" >&2; exit 1; }
+      window_title="$2"
+      shift 2
+      ;;
+    --window-x)
+      [[ $# -ge 2 ]] || { echo "Missing value for --window-x" >&2; exit 1; }
+      window_x="$2"
+      shift 2
+      ;;
+    --window-y)
+      [[ $# -ge 2 ]] || { echo "Missing value for --window-y" >&2; exit 1; }
+      window_y="$2"
+      shift 2
+      ;;
+    --window-width)
+      [[ $# -ge 2 ]] || { echo "Missing value for --window-width" >&2; exit 1; }
+      window_width="$2"
+      shift 2
+      ;;
+    --window-height)
+      [[ $# -ge 2 ]] || { echo "Missing value for --window-height" >&2; exit 1; }
+      window_height="$2"
+      shift 2
+      ;;
+    --keyboard)
+      [[ $# -ge 2 ]] || { echo "Missing value for --keyboard" >&2; exit 1; }
+      keyboard_mode="$2"
+      shift 2
+      ;;
+    --mouse)
+      [[ $# -ge 2 ]] || { echo "Missing value for --mouse" >&2; exit 1; }
+      mouse_mode="$2"
+      shift 2
+      ;;
+    --gamepad)
+      [[ $# -ge 2 ]] || { echo "Missing value for --gamepad" >&2; exit 1; }
+      gamepad_mode="$2"
+      shift 2
+      ;;
+    --otg)
+      otg_mode=1
+      shift
+      ;;
+    --prefer-text)
+      prefer_text=1
+      shift
+      ;;
+    --raw-key-events)
+      raw_key_events=1
+      shift
+      ;;
+    --no-key-repeat)
+      no_key_repeat=1
+      shift
+      ;;
+    --legacy-paste)
+      legacy_paste=1
+      shift
+      ;;
+    --no-clipboard-autosync)
+      no_clipboard_autosync=1
+      shift
+      ;;
+    --no-mouse-hover)
+      no_mouse_hover=1
+      shift
+      ;;
+    --shortcut-mod)
+      [[ $# -ge 2 ]] || { echo "Missing value for --shortcut-mod" >&2; exit 1; }
+      shortcut_mod="$2"
+      shift 2
+      ;;
+    --push-target)
+      [[ $# -ge 2 ]] || { echo "Missing value for --push-target" >&2; exit 1; }
+      push_target="$2"
+      shift 2
+      ;;
+    --kill-adb-on-close)
+      kill_adb_on_close=1
+      shift
+      ;;
+    --print-fps)
+      print_fps=1
+      shift
+      ;;
+    --start-app)
+      [[ $# -ge 2 ]] || { echo "Missing value for --start-app" >&2; exit 1; }
+      start_app="$2"
+      shift 2
+      ;;
+    --list-apps|--list-displays|--list-cameras|--list-camera-sizes|--list-encoders)
+      extra_args+=("$1")
+      shift
+      ;;
+    --screenshot)
+      take_screenshot=1
+      if [[ $# -ge 2 && "$2" != --* ]]; then
+        screenshot_path="$2"
+        shift 2
+      else
+        shift
+      fi
+      ;;
+    --install-apk)
+      [[ $# -ge 2 ]] || { echo "Missing APK path for --install-apk" >&2; exit 1; }
+      install_apk_path="$2"
+      shift 2
+      ;;
+    --push)
+      [[ $# -ge 2 ]] || { echo "Missing source file for --push" >&2; exit 1; }
+      push_src="$2"
+      if [[ $# -ge 3 && "$3" != --* ]]; then
+        push_dest="$3"
+        shift 3
+      else
+        shift 2
+      fi
+      ;;
+    --send-text)
+      [[ $# -ge 2 ]] || { echo "Missing text for --send-text" >&2; exit 1; }
+      send_text_val="$2"
+      shift 2
+      ;;
+    --keyevent)
+      [[ $# -ge 2 ]] || { echo "Missing key for --keyevent" >&2; exit 1; }
+      keyevent_val="$2"
+      shift 2
+      ;;
+    --enable-desktop-mode)
+      desktop_mode_action="enable"
+      shift
+      ;;
+    --disable-desktop-mode)
+      desktop_mode_action="disable"
+      shift
+      ;;
+    --launch-on-display)
+      [[ $# -ge 3 ]] || { echo "Usage: --launch-on-display DISPLAY_ID PKG" >&2; exit 1; }
+      launch_display_id="$2"
+      launch_display_app="$3"
+      shift 3
+      ;;
+    --freeform)
+      launch_freeform=1
+      shift
+      ;;
+    --force-stop)
+      launch_force_stop=1
+      shift
+      ;;
+    --landscape)
+      launch_landscape=1
+      shift
+      ;;
+    --display-rotation)
+      [[ $# -ge 3 ]] || { echo "Usage: --display-rotation DISPLAY_ID MODE(landscape|portrait|auto)" >&2; exit 1; }
+      display_rotation_id="$2"
+      display_rotation_mode="$3"
+      shift 3
+      ;;
+    --display-dpi)
+      [[ $# -ge 3 ]] || { echo "Usage: --display-dpi DISPLAY_ID DPI" >&2; exit 1; }
+      display_dpi_id="$2"
+      display_dpi_val="$3"
+      shift 3
+      ;;
+    --screenshot-display)
+      [[ $# -ge 2 ]] || { echo "Usage: --screenshot-display DISPLAY_ID [PATH]" >&2; exit 1; }
+      take_screenshot=1
+      screenshot_display_id="$2"
+      if [[ $# -ge 3 && "$3" != --* ]]; then
+        screenshot_path="$3"
+        shift 3
+      else
+        shift 2
+      fi
+      ;;
+    --list-files)
+      if [[ $# -ge 2 && "$2" != --* ]]; then
+        list_files_dir="$2"
+        shift 2
+      else
+        list_files_dir="/sdcard/Download"
+        shift
+      fi
+      ;;
+    --pull)
+      [[ $# -ge 2 ]] || { echo "Usage: --pull REMOTE_PATH [LOCAL_DEST]" >&2; exit 1; }
+      pull_src="$2"
+      if [[ $# -ge 3 && "$3" != --* ]]; then
+        pull_dest="$3"
+        shift 3
+      else
+        shift 2
+      fi
+      ;;
+    --tap)
+      [[ $# -ge 3 ]] || { echo "Usage: --tap X Y" >&2; exit 1; }
+      tap_x="$2"
+      tap_y="$3"
+      shift 3
+      ;;
+    --swipe)
+      [[ $# -ge 5 ]] || { echo "Usage: --swipe X1 Y1 X2 Y2 [DURATION_MS]" >&2; exit 1; }
+      if [[ $# -ge 6 && "$6" != --* ]]; then
+        swipe_args=("$2" "$3" "$4" "$5" "$6")
+        shift 6
+      else
+        swipe_args=("$2" "$3" "$4" "$5" "300")
+        shift 5
+      fi
+      ;;
+    --display-keyevent)
+      [[ $# -ge 3 ]] || { echo "Usage: --display-keyevent DISPLAY_ID KEY" >&2; exit 1; }
+      display_keyevent_id="$2"
+      display_keyevent_val="$3"
+      shift 3
+      ;;
+    --adb)
+      [[ $# -ge 2 ]] || { echo "Missing value for --adb" >&2; exit 1; }
+      ADB_BIN="$2"
+      shift 2
+      ;;
+    --config)
+      [[ $# -ge 2 ]] || { echo "Missing value for --config" >&2; exit 1; }
+      CONFIG_FILE="$2"
+      load_config "$CONFIG_FILE"
+      shift 2
+      ;;
+    --list-profiles)
+      list_profiles=1
+      shift
+      ;;
+    --menu)
+      interactive_menu=1
+      shift
+      ;;
+    --status)
+      show_status=1
+      shift
+      ;;
+    --device-info)
+      show_device_info=1
+      shift
+      ;;
+    --doctor)
+      run_doctor=1
+      shift
+      ;;
+    --scan-wifi)
+      scan_wifi=1
+      shift
+      ;;
+    --install)
+      install_launcher=1
+      shift
+      ;;
+    --gui)
+      launch_gui=1
+      shift
+      ;;
+    --howto|--about)
+      show_howto_cmd
+      exit 0
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      extra_args+=("$@")
+      break
+      ;;
+    *)
+      extra_args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# Immediate utility commands
+if [[ "$list_profiles" -eq 1 ]]; then
+  list_available_profiles
+  exit 0
+fi
+
+if [[ "$show_status" -eq 1 ]]; then
+  show_status_cmd
+  exit 0
+fi
+
+if [[ "$show_device_info" -eq 1 ]]; then
+  show_device_info_cmd
+  exit 0
+fi
+
+if [[ "$run_doctor" -eq 1 ]]; then
+  doctor_cmd
+  exit 0
+fi
+
+if [[ "$scan_wifi" -eq 1 ]]; then
+  scan_wifi_cmd
+  exit 0
+fi
+
+if [[ "$install_launcher" -eq 1 ]]; then
+  install_launcher_cmd
+  exit 0
+fi
+
+if [[ "$launch_gui" -eq 1 ]]; then
+  open "$SCRIPT_DIR/scrcpy-plus-gui.app"
+  exit 0
+fi
+
+if [[ -n "$pair_addr" ]]; then
+  ensure_adb
+  if [[ -n "$pair_code" ]]; then
+    "$ADB_BIN" pair "$pair_addr" "$pair_code"
+  else
+    "$ADB_BIN" pair "$pair_addr"
+  fi
+  exit 0
+fi
+
+if [[ -n "$disconnect_addr" ]]; then
+  ensure_adb
+  if [[ "$disconnect_addr" == "all" ]]; then
+    "$ADB_BIN" disconnect
+  else
+    "$ADB_BIN" disconnect "$disconnect_addr"
+  fi
+  exit 0
+fi
+
+if [[ "$take_screenshot" -eq 1 ]]; then
+  take_screenshot_cmd
+  exit 0
+fi
+
+if [[ -n "$install_apk_path" ]]; then
+  install_apk_cmd
+  exit 0
+fi
+
+if [[ -n "$push_src" ]]; then
+  push_file_cmd
+  exit 0
+fi
+
+if [[ -n "$send_text_val" ]]; then
+  send_text_cmd
+  exit 0
+fi
+
+if [[ -n "$keyevent_val" ]]; then
+  keyevent_cmd
+  exit 0
+fi
+
+if [[ -n "$launch_display_app" ]]; then
+  launch_on_display_cmd
+  exit 0
+fi
+
+if [[ -n "$display_keyevent_val" ]]; then
+  display_keyevent_cmd
+  exit 0
+fi
+
+if [[ -n "$display_rotation_mode" ]]; then
+  display_rotation_cmd
+  exit 0
+fi
+
+if [[ -n "$display_dpi_val" ]]; then
+  display_dpi_cmd
+  exit 0
+fi
+
+if [[ -n "$list_files_dir" ]]; then
+  list_files_cmd
+  exit 0
+fi
+
+if [[ -n "$pull_src" ]]; then
+  pull_file_cmd
+  exit 0
+fi
+
+if [[ -n "$tap_x" && -n "$tap_y" ]]; then
+  ensure_adb
+  run_adb shell input tap "$tap_x" "$tap_y"
+  exit 0
+fi
+
+if [[ ${#swipe_args[@]} -ge 4 ]]; then
+  ensure_adb
+  run_adb shell input swipe "${swipe_args[@]}"
+  exit 0
+fi
+
+if [[ -n "$desktop_mode_action" ]]; then
+  ensure_adb
+  if [[ "$desktop_mode_action" == "enable" ]]; then
+    run_adb shell settings put global force_desktop_mode_on_external_displays 1
+    run_adb shell settings put global enable_freeform_support 1
+    run_adb shell settings put global force_resizable_activities 1
+    echo "Android External Desktop & Freeform Mode enabled."
+  else
+    run_adb shell settings put global force_desktop_mode_on_external_displays 0
+    run_adb shell settings put global enable_freeform_support 0
+    run_adb shell settings put global force_resizable_activities 0
+    echo "Android External Desktop & Freeform Mode disabled."
+  fi
+  exit 0
+fi
+
+if [[ "$interactive_menu" -eq 1 ]]; then
+  interactive_menu_cmd
+fi
+
+if [[ -z "$profile" ]]; then
+  profile="${SCRCPY_PROFILE:-default}"
+fi
+
+scrcpy_args=()
+
+if [[ "$wireless" -eq 1 ]]; then
+  prepare_wireless
+fi
+
+apply_profile
+
+if [[ -n "$serial" ]]; then
+  scrcpy_args+=(-s "$serial")
+elif [[ "$select_usb" -eq 1 ]]; then
+  scrcpy_args+=(-d)
+elif [[ "$wireless" -eq 1 ]]; then
+  scrcpy_args+=(-e)
+fi
+
+if [[ -n "$tcpip_addr" ]]; then
+  if [[ "$tcpip_addr" == "auto" ]]; then
+    scrcpy_args+=(--tcpip)
+  else
+    scrcpy_args+=("--tcpip=$tcpip_addr")
+  fi
+fi
+
+if [[ "$otg_mode" -eq 1 ]]; then
+  scrcpy_args+=(--otg)
+fi
+
+if [[ "$windowed" -eq 1 ]]; then
+  fullscreen=0
+fi
+
+if [[ "$show_touches" -eq 1 ]]; then
+  scrcpy_args+=(-t)
+fi
+if [[ "$stay_awake" -eq 1 ]]; then
+  scrcpy_args+=(-w)
+fi
+if [[ "$screen_off" -eq 1 ]]; then
+  scrcpy_args+=(-S)
+fi
+if [[ "$power_off_on_close" -eq 1 ]]; then
+  scrcpy_args+=(--power-off-on-close)
+fi
+if [[ "$no_power_on" -eq 1 ]]; then
+  scrcpy_args+=(--no-power-on)
+fi
+if [[ -n "$screen_off_timeout" ]]; then
+  scrcpy_args+=(--screen-off-timeout "$screen_off_timeout")
+fi
+if [[ "$no_control" -eq 1 ]]; then
+  scrcpy_args+=(-n)
+fi
+if [[ "$disable_screensaver" -eq 1 ]]; then
+  scrcpy_args+=(--disable-screensaver)
+fi
+if [[ "$borderless" -eq 1 ]]; then
+  scrcpy_args+=(--window-borderless)
+fi
+if [[ "$always_on_top" -eq 1 ]]; then
+  scrcpy_args+=(--always-on-top)
+fi
+if [[ "$kill_adb_on_close" -eq 1 ]]; then
+  scrcpy_args+=(--kill-adb-on-close)
+fi
+if [[ "$print_fps" -eq 1 ]]; then
+  scrcpy_args+=(--print-fps)
+fi
+
+# Video & Display flags
+if [[ "$no_video" -eq 1 ]]; then
+  scrcpy_args+=(--no-video)
+fi
+if [[ "$no_window" -eq 1 ]]; then
+  scrcpy_args+=(--no-window)
+fi
+if [[ -n "$video_source" ]]; then
+  scrcpy_args+=("--video-source=$video_source")
+fi
+if [[ -n "$video_codec" ]]; then
+  scrcpy_args+=("--video-codec=$video_codec")
+fi
+if [[ -n "$video_encoder" ]]; then
+  scrcpy_args+=("--video-encoder=$video_encoder")
+fi
+if [[ -n "$bitrate" ]]; then
+  scrcpy_args+=(-b "$bitrate")
+fi
+if [[ -n "$fps" ]]; then
+  scrcpy_args+=(--max-fps "$fps")
+fi
+if [[ -n "$max_size" ]]; then
+  scrcpy_args+=(-m "$max_size")
+fi
+if [[ -n "$orientation" ]]; then
+  scrcpy_args+=("--orientation=$orientation")
+fi
+if [[ -n "$capture_orientation" ]]; then
+  scrcpy_args+=("--capture-orientation=$capture_orientation")
+fi
+if [[ -n "$angle" ]]; then
+  scrcpy_args+=(--angle "$angle")
+fi
+if [[ -n "$video_buffer" ]]; then
+  scrcpy_args+=(--video-buffer "$video_buffer")
+fi
+if [[ -n "$render_driver" ]]; then
+  scrcpy_args+=("--render-driver=$render_driver")
+fi
+
+if [[ "$video_source" != "camera" && "$otg_mode" -eq 0 ]]; then
+  if [[ -n "$display_id" ]]; then
+    scrcpy_args+=(--display-id "$display_id")
+  fi
+  if [[ -n "$crop" ]]; then
+    scrcpy_args+=(--crop "$crop")
+  fi
+  if [[ "$use_new_display" -eq 1 ]]; then
+    if [[ -n "$new_display" ]]; then
+      scrcpy_args+=("--new-display=$new_display")
+    else
+      scrcpy_args+=(--new-display)
+    fi
+  fi
+  if [[ "$no_vd_destroy_content" -eq 1 ]]; then
+    scrcpy_args+=(--no-vd-destroy-content)
+  fi
+  if [[ "$no_vd_system_decorations" -eq 1 ]]; then
+    scrcpy_args+=(--no-vd-system-decorations)
+    if [[ -z "$start_app" ]]; then
+      start_app="+com.android.settings"
+    fi
+  fi
+  if [[ -n "$display_ime_policy" ]]; then
+    scrcpy_args+=("--display-ime-policy=$display_ime_policy")
+  fi
+fi
+
+# Camera flags
+if [[ -n "$camera_facing" ]]; then
+  scrcpy_args+=("--camera-facing=$camera_facing")
+fi
+if [[ -n "$camera_id" ]]; then
+  scrcpy_args+=("--camera-id=$camera_id")
+fi
+if [[ -n "$camera_size" ]]; then
+  scrcpy_args+=("--camera-size=$camera_size")
+fi
+if [[ -n "$camera_ar" ]]; then
+  scrcpy_args+=("--camera-ar=$camera_ar")
+fi
+if [[ -n "$camera_fps" ]]; then
+  scrcpy_args+=("--camera-fps=$camera_fps")
+fi
+if [[ "$camera_high_speed" -eq 1 ]]; then
+  scrcpy_args+=(--camera-high-speed)
+fi
+
+# Audio flags
+if [[ "$no_audio" -eq 1 ]]; then
+  scrcpy_args+=(--no-audio)
+else
+  if [[ "$audio_dup" -eq 1 ]]; then
+    # scrcpy requires --audio-source=playback when --audio-dup is enabled
+    if [[ -z "$audio_source" || "$audio_source" == "output" ]]; then
+      audio_source="playback"
+    fi
+  fi
+  if [[ -n "$audio_source" ]]; then
+    scrcpy_args+=("--audio-source=$audio_source")
+  fi
+  if [[ "$audio_dup" -eq 1 ]]; then
+    scrcpy_args+=(--audio-dup)
+  fi
+  if [[ -n "$audio_codec" ]]; then
+    scrcpy_args+=("--audio-codec=$audio_codec")
+  fi
+  if [[ -n "$audio_encoder" ]]; then
+    scrcpy_args+=("--audio-encoder=$audio_encoder")
+  fi
+  if [[ -n "$audio_bitrate" ]]; then
+    scrcpy_args+=("--audio-bit-rate=$audio_bitrate")
+  fi
+  if [[ -n "$audio_buffer" ]]; then
+    scrcpy_args+=(--audio-buffer "$audio_buffer")
+  fi
+  if [[ -n "$audio_output_buffer" ]]; then
+    scrcpy_args+=(--audio-output-buffer "$audio_output_buffer")
+  fi
+  if [[ "$require_audio" -eq 1 ]]; then
+    scrcpy_args+=(--require-audio)
+  fi
+fi
+
+# Input & Peripherals flags
+if [[ -n "$keyboard_mode" ]]; then
+  scrcpy_args+=("--keyboard=$keyboard_mode")
+fi
+if [[ -n "$mouse_mode" ]]; then
+  scrcpy_args+=("--mouse=$mouse_mode")
+fi
+if [[ -n "$gamepad_mode" ]]; then
+  scrcpy_args+=("--gamepad=$gamepad_mode")
+fi
+if [[ "$prefer_text" -eq 1 ]]; then
+  scrcpy_args+=(--prefer-text)
+fi
+if [[ "$raw_key_events" -eq 1 ]]; then
+  scrcpy_args+=(--raw-key-events)
+fi
+if [[ "$no_key_repeat" -eq 1 ]]; then
+  scrcpy_args+=(--no-key-repeat)
+fi
+if [[ "$legacy_paste" -eq 1 ]]; then
+  scrcpy_args+=(--legacy-paste)
+fi
+if [[ "$no_clipboard_autosync" -eq 1 ]]; then
+  scrcpy_args+=(--no-clipboard-autosync)
+fi
+if [[ "$no_mouse_hover" -eq 1 ]]; then
+  scrcpy_args+=(--no-mouse-hover)
+fi
+if [[ -n "$shortcut_mod" ]]; then
+  scrcpy_args+=("--shortcut-mod=$shortcut_mod")
+fi
+if [[ -n "$push_target" ]]; then
+  scrcpy_args+=(--push-target "$push_target")
+fi
+
+# Window position & size
+if [[ -n "$window_title" ]]; then
+  scrcpy_args+=(--window-title "$window_title")
+fi
+if [[ -n "$window_x" ]]; then
+  scrcpy_args+=(--window-x "$window_x")
+fi
+if [[ -n "$window_y" ]]; then
+  scrcpy_args+=(--window-y "$window_y")
+fi
+if [[ -n "$window_width" ]]; then
+  scrcpy_args+=(--window-width "$window_width")
+fi
+if [[ -n "$window_height" ]]; then
+  scrcpy_args+=(--window-height "$window_height")
+fi
+if [[ "$fullscreen" -eq 1 && "$windowed" -eq 0 ]]; then
+  scrcpy_args+=(-f)
+fi
+
+# Recording & Session limits
+if [[ -n "$record_path" ]]; then
+  scrcpy_args+=(-r "$record_path")
+fi
+if [[ -n "$record_format" ]]; then
+  scrcpy_args+=("--record-format=$record_format")
+fi
+if [[ -n "$record_orientation" ]]; then
+  scrcpy_args+=("--record-orientation=$record_orientation")
+fi
+if [[ "$no_playback" -eq 1 ]]; then
+  scrcpy_args+=(-N)
+fi
+if [[ -n "$time_limit" ]]; then
+  scrcpy_args+=(--time-limit "$time_limit")
+fi
+if [[ -n "$start_app" ]]; then
+  scrcpy_args+=("--start-app=$start_app")
+fi
+
+if [[ ! -x "$SCRCPY_BIN" ]]; then
+  echo "Error: scrcpy binary not found or not executable: $SCRCPY_BIN" >&2
+  exit 1
+fi
+
+if [[ ${#extra_args[@]} -gt 0 ]]; then
+  scrcpy_args+=("${extra_args[@]}")
+fi
+
+printf 'Starting scrcpy with: %s\n' "${scrcpy_args[*]}" >&2
+exec "$SCRCPY_BIN" "${scrcpy_args[@]}"
