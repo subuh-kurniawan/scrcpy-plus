@@ -258,11 +258,23 @@ Pastikan komputer dan HP Android terhubung ke jaringan Wi-Fi atau Hotspot yang s
 1. **Muncul Pesan `No route to host` atau Wi-Fi ADB Tidak Terdeteksi**:
    - Klik tombol **`Doctor`** di bagian atas aplikasi GUI (atau jalankan `./scrcpy-plus --doctor`).
    - Jika menggunakan koneksi **Hotspot HP**, hubungkan kabel USB sekali lalu klik **`Auto USB → Wi-Fi (5555)`** agar fitur *Reverse-ARP Wakeup* mendaftarkan alamat MAC HP ke tabel ARP komputer secara otomatis.
-   - Di **macOS Sequoia (macOS 15+)**, pastikan izin akses jaringan lokal untuk `scrcpy-plus` diaktifkan pada *System Settings → Privacy & Security → Local Network*.
+   - Di **macOS Sequoia (macOS 15+)**, pastikan izin akses jar<img width="3178" height="1900" alt="CleanShot 2026-10-28 at 09 46 04@2x" src="https://github.com/user-attachments/assets/211d4c87-132a-47d9-b105-f81f94148301" />
+<img width="3040" height="1760" alt="CleanShot 2026-10-28 at 09 46 38@2x" src="https://github.com/user-attachments/assets/ffa5eb8c-fd7d-49af-a76f-99657361eca5" />
+<img width="3036" height="1758" alt="CleanShot 2026-10-28 at 09 46 52@2x" src="https://github.com/user-attachments/assets/f33d31cb-ab56-436a-81ab-216689ef51aa" />
+<img width="3046" height="1766" alt="CleanShot 2026-10-28 at 09 47 07@2x" src="https://github.com/user-attachments/assets/bebdc545-4254-4549-b22c-372e0c97e1db" />
+<img width="3054" height="1768" alt="CleanShot 2026-10-28 at 09 47 25@2x" src="https://github.com/user-attachments/assets/cc1abdeb-c93f-4d1a-aed1-629f0c525360" />
+<img width="3050" height="1770" alt="CleanShot 2026-10-28 at 09 47 41@2x" src="https://github.com/user-attachments/assets/4151309d-a908-4e0f-919a-2a044ca103ef" />
+<img width="3048" height="1768" alt="CleanShot 2026-10-28 at 09 47 58@2x" src="https://github.com/user-attachments/assets/78324a99-9eeb-4bfa-98fa-8920467336e3" />
+<img width="3052" height="1774" alt="CleanShot 2026-10-28 at 09 48 12@2x" src="https://github.com/user-attachments/assets/75060038-e8fb-46fa-ae24-eb5e4ff5b0e0" />
+<img width="3048" height="1770" alt="CleanShot 2026-10-28 at 09 48 24@2x" src="https://github.com/user-attachments/assets/39bcef18-5468-421c-af95-10168c18ea93" />
+<img width="3060" height="1776" alt="CleanShot 2026-10-28 at 09 48 36@2x" src="https://github.com/user-attachments/assets/a97b033e-6a17-48cf-a80f-71dfb4e25ad5" />
+<img width="3360" height="2100" alt="CleanShot 2026-10-28 at 09 49 09@2x" src="https://github.com/user-attachments/assets/3faf2b08-9204-49cd-a1c4-3cd522ff2a31" />
+ingan lokal untuk `scrcpy-plus` diaktifkan pada *System Settings → Privacy & Security → Local Network*.
 2. **Aplikasi di Mode DeX Terbuka di Layar HP (Bukan di Jendela DeX)**:
    - Pastikan opsi **`Pindah App dari Layar HP (--force-stop awal)`** dicentang di pengaturan DeX agar Android memindahkan *activity task* aplikasi dari layar fisik HP (`Display #0`) ke *Virtual Display DeX*.
 
 ---
+<img width="3360" height="2100" alt="CleanShot 2026-10-28 at 09 49 20@2x" src="https://github.com/user-attachments/assets/6744608f-d969-450a-8c08-c1039557b593" />
 
 ## Informasi Developer
 
